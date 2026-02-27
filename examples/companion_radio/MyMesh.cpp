@@ -1,4 +1,5 @@
 #include "MyMesh.h"
+#include "RepeatFreqValidation.h"
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
@@ -887,10 +888,6 @@ uint32_t MyMesh::getBLEPin() {
   return _active_ble_pin;
 }
 
-struct FreqRange {
-  uint32_t lower_freq, upper_freq;
-};
-
 static FreqRange repeat_freq_ranges[] = {
   { 433000, 433000 },
   { 869000, 869000 },
@@ -898,11 +895,8 @@ static FreqRange repeat_freq_ranges[] = {
 };
 
 bool MyMesh::isValidClientRepeatFreq(uint32_t f) const {
-  for (int i = 0; i < sizeof(repeat_freq_ranges)/sizeof(repeat_freq_ranges[0]); i++) {
-    auto r = &repeat_freq_ranges[i];
-    if (f >= r->lower_freq && f <= r->upper_freq) return true;
-  }
-  return false;
+  return istRepeatFreqErlaubt(f, repeat_freq_ranges,
+                              sizeof(repeat_freq_ranges) / sizeof(repeat_freq_ranges[0]));
 }
 
 void MyMesh::startInterface(BaseSerialInterface &serial) {
@@ -1238,7 +1232,12 @@ void MyMesh::handleCmdFrame(size_t len) {
       repeat = cmd_frame[i++];   // FIRMWARE_VER_CODE  9+
     }
 
-    if (repeat && !isValidClientRepeatFreq(freq)) {
+    RepeatFreqRegel repeat_regel = RepeatFreqRegel::KEIN_TREFFER;
+    bool repeat_freq_ist_erlaubt = istRepeatFreqErlaubt(
+        freq, repeat_freq_ranges, sizeof(repeat_freq_ranges) / sizeof(repeat_freq_ranges[0]), &repeat_regel);
+
+    if (repeat && !repeat_freq_ist_erlaubt) {
+      MESH_DEBUG_PRINTLN("Repeat-Frequenz blockiert: f=%d kHz, Regel=%d", freq, (int)repeat_regel);
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else if (freq >= 300000 && freq <= 2500000 && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7000 &&
         bw <= 500000) {
@@ -1780,6 +1779,10 @@ void MyMesh::handleCmdFrame(size_t len) {
       auto r = &repeat_freq_ranges[k];
       memcpy(&out_frame[i], &r->lower_freq, 4); i += 4;
       memcpy(&out_frame[i], &r->upper_freq, 4); i += 4;
+
+      char freq_bereich[32];
+      MESH_DEBUG_PRINTLN("Erlaubter Repeat-Bereich[%d]: %s", k,
+                         formatteFreqBereichMHz(*r, freq_bereich, sizeof(freq_bereich)));
     }
     _serial->writeFrame(out_frame, i);
   } else {
